@@ -1,0 +1,205 @@
+---
+title: "Project-SARS 2003 outbreak Analysis-Nabeela Khan & Sowmya Tummala"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+# Load libraries
+
+
+```r
+install.packages(c("tidyverse", "plotly", "kableExtra", "knitr", "maps"))
+```
+
+```{r}
+library(tidyverse)   # dplyr, tidyr, ggplot2, lubridate
+library(plotly)
+library(knitr)
+library(kableExtra)
+library(maps)        # provides map_data("world")
+```
+
+# Import dataset & display the first few rows
+
+The data file lives in the `data/` folder of this project.
+
+```{r}
+sars <- read.csv("~/Downloads/sars_2003_complete_dataset_clean.csv.xls",
+                 header = TRUE, stringsAsFactors = FALSE)
+colnames(sars) <- c("Date", "Country", "Confirmed Cases",
+                    "Patient Deaths", "Patients Recovered")
+
+head(sars)
+```
+
+```{r}
+# Dimension of dataset
+dim(sars)
+```
+
+```{r}
+# Columns and class
+sapply(sars, class)
+```
+
+```{r}
+# Duplicate rows
+sum(duplicated(sars))
+```
+
+```{r}
+# Convert date from character to Date
+sars$Date <- as.Date(sars$Date, format = "%Y-%m-%d")
+sum(is.na(sars$Date))   # should be 0; if not, the date format doesn't match
+```
+
+```{r}
+sars %>% arrange(desc(Date)) %>% head()
+```
+
+```{r}
+length(unique(sars$Date))
+
+sarsconfirm <- sars %>% group_by(Date) %>%
+  summarise(confirmed_case = sum(`Confirmed Cases`)) %>% as.data.frame()
+sarsdeath <- sars %>% group_by(Date) %>%
+  summarise(death_case = sum(`Patient Deaths`)) %>% as.data.frame()
+sarsrecover <- sars %>% group_by(Date) %>%
+  summarise(recovered_case = sum(`Patients Recovered`)) %>% as.data.frame()
+
+head(sarsconfirm)
+head(sarsdeath)
+head(sarsrecover)
+```
+
+```{r}
+# Combine data from above and reshape from wide to long
+sarscases <- sarsconfirm %>%
+  left_join(sarsdeath, by = "Date") %>%
+  left_join(sarsrecover, by = "Date") %>%
+  pivot_longer(c(confirmed_case, death_case, recovered_case),
+               names_to = "casetype", values_to = "count")
+head(sarscases)
+```
+
+```{r}
+# Confirmed cases, patient deaths and patients recovered over time
+# (the counts in the data are cumulative totals)
+ggplot(sarscases, aes(x = Date, y = count, color = casetype)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Cumulative Cases by Case Type") +
+  xlab("Date") +
+  ylab("Number of cases")
+```
+
+```{r}
+# Top ten countries by recovery rate
+# Counts are cumulative, so use each country's final (maximum) values.
+recovery_rate <- sars %>%
+  group_by(Country) %>%
+  summarize(RecoveryRate = 100 * max(`Patients Recovered`) / max(`Confirmed Cases`))
+
+top_ones <- recovery_rate %>% arrange(desc(RecoveryRate))
+most_recovered <- head(top_ones, 10)
+most_recovered
+
+ggplot(most_recovered, aes(x = reorder(Country, -RecoveryRate), y = RecoveryRate, fill = Country)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Country", y = "Recovery Rate (%)", title = "Top Ten Countries Recovery Rate") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+summary(recovery_rate$RecoveryRate)
+```
+
+```{r}
+# Boxplot of recovery rate for all countries
+ggplot(data = recovery_rate, aes(x = "All countries", y = RecoveryRate)) +
+  geom_boxplot(fill = "yellow1") +
+  coord_cartesian(ylim = c(0, 100)) +
+  ggtitle("Recovery rate of all countries")
+```
+
+```{r}
+# Table of country names with their recovery rates
+kable(recovery_rate) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "left", fixed_thead = TRUE) %>%
+  column_spec(1, bold = TRUE, border_right = TRUE) %>%
+  row_spec(0, bold = TRUE, color = "red")
+```
+
+```{r}
+# Top ten countries by death count
+country_totals <- sars %>%
+  group_by(Country) %>%
+  summarize(totConfirmed = max(`Confirmed Cases`),
+            totDeaths    = max(`Patient Deaths`),
+            totRecovered = max(`Patients Recovered`))
+
+top_country <- country_totals %>% arrange(desc(totDeaths)) %>% head(10)
+top_country
+
+ggplot(top_country, aes(x = reorder(Country, -totDeaths), y = totDeaths, fill = Country)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Country", y = "Death Count", title = "Top Ten Countries Death Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+# Total number of confirmed cases by country
+sars %>%
+  group_by(Country) %>%
+  summarise(maxx = max(`Confirmed Cases`)) %>%
+  ggplot(aes(x = reorder(Country, maxx), y = maxx)) +
+  geom_bar(stat = "identity", fill = "red") +
+  coord_flip() +
+  theme(panel.background = element_blank(),
+        strip.background = element_blank(),
+        axis.title = element_text(color = "black"),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) +
+  labs(x = "Countries", y = "Confirmed cases",
+       title = "Total number of cases by Country")
+```
+
+```{r}
+# Data frame with maximum confirmed cases per country
+value_data <- sars %>%
+  group_by(Country) %>%
+  summarise(Count = n(), maxCases = max(`Confirmed Cases`))
+
+# Rename countries so they match the names used by map_data("world").
+# Add more pairs here if the check below shows unmatched names.
+country_fix <- c("United States" = "USA",
+                 "United Kingdom" = "UK")
+value_data$Country <- dplyr::recode(value_data$Country, !!!country_fix)
+
+# Countries in the data that will NOT appear on the map (names don't match)
+setdiff(value_data$Country, unique(map_data("world")$region))
+
+kable(t(value_data %>%
+          select(Country, maxCases) %>%
+          arrange(desc(maxCases))))
+```
+
+```{r}
+# Map of the most confirmed cases worldwide
+worldmap <- map_data("world")
+merged_data <- merge(x = worldmap, y = value_data,
+                     by.x = "region", by.y = "Country", all.x = TRUE) %>%
+  arrange(order)
+
+map_plot <- ggplot(data = merged_data,
+                   aes(x = long, y = lat, group = group, fill = maxCases)) +
+  geom_polygon(color = "grey60", linewidth = 0.1) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey90") +
+  theme_minimal() +
+  labs(fill = "Maximum Cases", title = "Maximum confirmed SARS cases by country")
+
+ggplotly(map_plot)
+```
